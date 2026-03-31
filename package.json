@@ -1,0 +1,38 @@
+{
+  "name": "contact-hunter",
+  "version": "1.0.0",
+  "description": "Self-hosted multi-channel contact intelligence. Find verified business emails via SMTP, DNS, web scraping, GitHub, YouTube, and company registries. Zero API cost.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./server": "./src/server.js"
+  },
+  "bin": {
+    "contact-hunter": "./src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test tests/",
+    "start": "node src/server.js",
+    "cli": "node src/cli.js"
+  },
+  "keywords": [
+    "email-finder",
+    "contact-discovery",
+    "smtp-verification",
+    "email-verification",
+    "lead-generation",
+    "osint",
+    "email-hunter",
+    "business-email",
+    "self-hosted"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  },
+  "devDependencies": {}
+}
