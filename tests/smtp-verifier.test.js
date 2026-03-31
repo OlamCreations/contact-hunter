@@ -33,6 +33,7 @@ describe("smtp-verifier", () => {
     it("returns smtp_accepted for accepted email", async () => {
       const result = await verifyEmailSmtp("alice@company.com", {
         resolveMx: async () => [{ exchange: "mx.company.com", priority: 10 }],
+        validateMxHost: async () => true,
         smtpHandshake: async () => ({
           accepted: true,
           responseCode: 250,
@@ -50,6 +51,7 @@ describe("smtp-verifier", () => {
     it("returns smtp_rejected for rejected email", async () => {
       const result = await verifyEmailSmtp("bad@company.com", {
         resolveMx: async () => [{ exchange: "mx.company.com", priority: 10 }],
+        validateMxHost: async () => true,
         smtpHandshake: async () => ({
           accepted: false,
           responseCode: 550,
@@ -63,9 +65,19 @@ describe("smtp-verifier", () => {
       assert.equal(result.reason, "smtp_rejected")
     })
 
+    it("blocks MX hosts resolving to private IPs", async () => {
+      const result = await verifyEmailSmtp("alice@evil.com", {
+        resolveMx: async () => [{ exchange: "mx.evil.com", priority: 10 }],
+        validateMxHost: async () => false,
+      })
+      assert.equal(result.valid, false)
+      assert.equal(result.reason, "mx_blocked")
+    })
+
     it("detects catch-all domains", async () => {
       const result = await verifyEmailSmtp("anyone@catchall.com", {
         resolveMx: async () => [{ exchange: "mx.catchall.com", priority: 10 }],
+        validateMxHost: async () => true,
         smtpHandshake: async () => ({
           accepted: true,
           responseCode: 250,
@@ -82,6 +94,7 @@ describe("smtp-verifier", () => {
     it("handles greylisting", async () => {
       const result = await verifyEmailSmtp("alice@grey.com", {
         resolveMx: async () => [{ exchange: "mx.grey.com", priority: 10 }],
+        validateMxHost: async () => true,
         smtpHandshake: async () => ({
           accepted: false,
           responseCode: 421,

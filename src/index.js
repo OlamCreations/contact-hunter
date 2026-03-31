@@ -17,7 +17,7 @@
 export { createContactHunter, domainSearch, findEmail, verifyEmail } from "./hunter.js"
 export { analyzeDomain, identifyProvider, parseSpfRecord } from "./dns-intel.js"
 export { generatePatterns, detectDomainPattern, applyPattern, PATTERN_TEMPLATES } from "./pattern-generator.js"
-export { verifyEmailSmtp, smtpHandshake, extractDomain } from "./smtp-verifier.js"
+export { verifyEmailSmtp, smtpHandshake, extractDomain, isPrivateIp, validateMxHost } from "./smtp-verifier.js"
 export { computeConfidence, selectBestCandidate, SCORE_MATRIX } from "./confidence-scorer.js"
 export { extractEmailsFromDomain, extractEmailsFromText, findContactPageUrls } from "./web-email-extractor.js"
 export { searchForEmail } from "./search-email-miner.js"
