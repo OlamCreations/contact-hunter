@@ -15,6 +15,7 @@
 
 import dns from "node:dns/promises"
 import { isIP } from "node:net"
+import { safeScrape, validateUrl } from "./safe-scrape.js"
 import { createContactHunter } from "./hunter.js"
 import { analyzeDomain } from "./dns-intel.js"
 import { generatePatterns } from "./pattern-generator.js"
@@ -24,40 +25,6 @@ import { mineGitHubEmails } from "./github-email-miner.js"
 import { mineYouTubeEmail } from "./youtube-email-miner.js"
 import { searchFrenchRegistry } from "./company-registry.js"
 import { isPrivateIp } from "./smtp-verifier.js"
-
-async function validateUrl(url) {
-  const parsed = new URL(url)
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new Error("blocked")
-  const hostname = parsed.hostname
-  if (isIP(hostname) && isPrivateIp(hostname)) throw new Error("blocked")
-  try {
-    const addresses = await dns.resolve4(hostname)
-    for (const addr of addresses) {
-      if (isPrivateIp(addr)) throw new Error("blocked")
-    }
-  } catch (err) {
-    if (err.message === "blocked") throw err
-  }
-  return url
-}
-
-async function safeScrape(url, opts = {}) {
-  try {
-    await validateUrl(url)
-    const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), opts.timeout || 10_000)
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "ContactHunter/1.0" },
-      redirect: "manual",
-    })
-    clearTimeout(timeout)
-    const text = await response.text()
-    return { text: text.slice(0, 500_000), status: response.status }
-  } catch {
-    return { text: "", status: 0 }
-  }
-}
 
 async function defaultSearch(params) {
   const apiKey = process.env.BRAVE_API_KEY

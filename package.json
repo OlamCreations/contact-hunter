@@ -12,7 +12,7 @@
     "contact-hunter": "./src/cli.js"
   },
   "scripts": {
-    "test": "node --test tests/",
+    "test": "node --test \"tests/*.test.js\"",
     "start": "node src/server.js",
     "cli": "node src/cli.js"
   },

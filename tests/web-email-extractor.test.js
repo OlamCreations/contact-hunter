@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { extractEmailsFromText, findContactPageUrls } from "../src/web-email-extractor.js"
+import { extractEmailsFromText, findContactPageUrls, extractEmailsFromDomain } from "../src/web-email-extractor.js"
 
 describe("web-email-extractor", () => {
   describe("extractEmailsFromText", () => {
