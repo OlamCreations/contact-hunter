@@ -23,5 +23,6 @@ export { extractEmailsFromDomain, extractEmailsFromText, findContactPageUrls } f
 export { searchForEmail } from "./search-email-miner.js"
 export { mineGitHubEmails, searchGitHubUsers } from "./github-email-miner.js"
 export { mineYouTubeEmail, extractBusinessEmail } from "./youtube-email-miner.js"
-export { searchFrenchRegistry, extractPhoneNumbers, extractSiren } from "./company-registry.js"
+export { searchFrenchRegistry, extractPhoneNumbers, extractSiren, entityToken, pageNamesEntity, isLegalNoticeUrl, REGISTRY_CONFIG } from "./company-registry.js"
+export { searchDuckDuckGo, parseLiteResults } from "./search-fallback.js"
 export { createContactCache, SOURCE_TTL_DAYS } from "./contact-cache.js"

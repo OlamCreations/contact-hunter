@@ -176,7 +176,7 @@ Multiple corroborating sources add +3 (2 sources) or +5 (3+ sources) bonus. Boun
 | `PORT` | HTTP server port | 3847 |
 | `CONTACT_HUNTER_EHLO_DOMAIN` | EHLO domain for SMTP | localhost |
 | `CONTACT_HUNTER_DB_PATH` | SQLite cache path | ./contact-hunter.db |
-| `BRAVE_API_KEY` | Brave Search API key | (disabled) |
+| `BRAVE_API_KEY` | Brave Search API key | optional, falls back to DuckDuckGo lite |
 | `GITHUB_TOKEN` | GitHub API token | (60 req/hr) |
 
 ## Tests

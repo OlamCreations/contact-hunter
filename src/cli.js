@@ -24,11 +24,15 @@ import { searchForEmail } from "./search-email-miner.js"
 import { mineGitHubEmails } from "./github-email-miner.js"
 import { mineYouTubeEmail } from "./youtube-email-miner.js"
 import { searchFrenchRegistry } from "./company-registry.js"
-import { isPrivateIp } from "./smtp-verifier.js"
+import { searchDuckDuckGo } from "./search-fallback.js"
+import { isPrivateIp, smtpHandshake } from "./smtp-verifier.js"
 
 async function defaultSearch(params) {
   const apiKey = process.env.BRAVE_API_KEY
-  if (!apiKey) return { results: [] }
+  // Without a key, and whenever Brave declines, the keyless endpoint answers the
+  // same shape. Returning an empty list here used to make three channels report
+  // "nothing on the web" when nothing had been asked.
+  if (!apiKey) return searchDuckDuckGo(params)
 
   try {
     const url = new URL("https://api.search.brave.com/res/v1/web/search")
@@ -41,7 +45,11 @@ async function defaultSearch(params) {
     })
     // A throttled search is not an empty web. Returning [] here made the
     // registry channel conclude "no record" on a company that has one.
-    if (!response.ok) return { results: [], error: `http_${response.status}` }
+    if (!response.ok) {
+      const fallback = await searchDuckDuckGo(params)
+      if (fallback.results.length > 0) return fallback
+      return { results: [], error: `http_${response.status}` }
+    }
     const data = await response.json()
     return {
       error: null,
@@ -52,8 +60,18 @@ async function defaultSearch(params) {
       })),
     }
   } catch (err) {
+    const fallback = await searchDuckDuckGo(params)
+    if (fallback.results.length > 0) return fallback
     return { results: [], error: err.name || "search_failed" }
   }
+}
+
+// Real probe behind detectCatchAll. Left unprovided, the detector answers null,
+// and `isCatchAll` stays unknown forever instead of being measured.
+async function smtpCheck(email, mxHost) {
+  const ehlo = process.env.CONTACT_HUNTER_EHLO_DOMAIN || "localhost"
+  const r = await smtpHandshake(mxHost, ehlo, email)
+  return { accepted: r.accepted === true, responseCode: r.responseCode }
 }
 
 function createFullHunter() {
@@ -63,6 +81,7 @@ function createFullHunter() {
     githubMinerFn: (name, domain) => mineGitHubEmails(name, domain),
     youtubeMinerFn: (url) => mineYouTubeEmail(url, { scrape: safeScrape }),
     companyRegistryFn: (name) => searchFrenchRegistry(name, { searchFn: defaultSearch, scrape: safeScrape }),
+    smtpCheck,
     enableRateLimit: true,
   })
 }
@@ -165,7 +184,7 @@ async function main() {
         console.error("Usage: contact-hunter dns <domain>")
         process.exit(1)
       }
-      const result = await analyzeDomain(domain)
+      const result = await analyzeDomain(domain, { smtpCheck })
       printResult(result)
       break
     }
