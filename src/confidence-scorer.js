@@ -9,6 +9,10 @@ const SCORE_MATRIX = Object.freeze({
   linkedin:          { base: 35, smtpBonus: 45, decayPerMonth: 6 },
 })
 
+// Sources that generate a candidate rather than observe one. They can carry a
+// score of their own, but they never corroborate another source.
+const NON_OBSERVING_SOURCES = new Set(["pattern"])
+
 const BOUNCE_PENALTY = -100
 
 export function applyTemporalDecay(score, foundAt, now) {
@@ -56,13 +60,18 @@ export function computeConfidence(signals, opts = {}) {
   }
 
   const sourceCount = Object.keys(breakdown).length
-  const corroborationBonus = sourceCount >= 3 ? 5 : sourceCount >= 2 ? 3 : 0
+  // A generated pattern is not a witness: it is the hypothesis that produced the
+  // candidate. Counting it as corroboration pushed an SMTP verification from 95
+  // to 98, above the ceiling of the only source that proves anything.
+  const observedCount = Object.keys(breakdown).filter((k) => !NON_OBSERVING_SOURCES.has(k)).length
+  const corroborationBonus = observedCount >= 3 ? 5 : observedCount >= 2 ? 3 : 0
   const finalScore = Math.min(100, maxScore + corroborationBonus)
 
   return Object.freeze({
     score: finalScore,
     breakdown,
     sources: sourceCount,
+    observedSources: observedCount,
   })
 }
 
@@ -80,4 +89,4 @@ export function selectBestCandidate(candidates) {
   return scored[0] || null
 }
 
-export { SCORE_MATRIX }
+export { SCORE_MATRIX, NON_OBSERVING_SOURCES }

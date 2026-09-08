@@ -27,6 +27,7 @@ function buildEmptyFindResult(role) {
   return Object.freeze({
     email: null, confidence: 0, firstName: null, lastName: null,
     position: role || null, linkedinUrl: null,
+    source: null, verified: false, smtpInformative: null,
   })
 }
 
@@ -208,26 +209,59 @@ export function createContactHunter(deps = {}) {
         } catch { /* non-critical */ }
       }
 
-      // 6. SMTP verify top candidates (rate-limited)
-      const limit = Math.min(candidates.length, 5)
+      // 6. SMTP verify, budget spent where it discriminates (rate-limited)
+      // The first probe reveals which regime we are in, at no extra cost: on an
+      // accept-all domain every further call is uninformative, on a domain that
+      // rejects unknown recipients every call is decisive.
+      const UNKNOWN_REGIME_LIMIT = 5
+      let smtpInformative = null
+      let limit = Math.min(candidates.length, UNKNOWN_REGIME_LIMIT)
       for (let i = 0; i < limit; i++) {
         const c = candidates[i]
         try {
           const smtp = await smtpVerify(c.email)
-          if (smtp.valid && !smtp.catchAll) {
+          // Only an explicit false proves the server rejects unknown recipients.
+          // `!smtp.catchAll` also passed on null, the value that means the probe
+          // never concluded, which promoted generated addresses to 95.
+          if (smtp.valid && smtp.catchAll === false) {
             c.signals.push({ source: "smtp_verify" })
             c.smtpVerified = true
             c.confidence = scoreFn(c.signals).score
-            return Object.freeze({ email: c.email, confidence: c.confidence, firstName: c.firstName, lastName: c.lastName, position: c.position, linkedinUrl: null })
+            return Object.freeze({
+              email: c.email, confidence: c.confidence, firstName: c.firstName,
+              lastName: c.lastName, position: c.position, linkedinUrl: null,
+              source: c.source, verified: true, smtpInformative: true,
+            })
+          }
+          // The server said this recipient does not exist. Keeping the candidate
+          // in the pool meant testing an address, learning it was wrong, and
+          // returning it anyway at the score of an untested guess.
+          if (smtp.valid === false && smtp.reason === "smtp_rejected") {
+            c.rejected = true
+          }
+
+          if (smtpInformative === null && smtp.catchAll !== undefined) {
+            smtpInformative = smtp.catchAll === false
+            // Accept-all, or a probe that never concluded: stop spending calls
+            // that cannot separate a real address from a generated one.
+            limit = smtpInformative ? candidates.length : i + 1
           }
         } catch { /* continue */ }
       }
 
-      // 7. Score and return best
-      for (const c of candidates) { c.confidence = scoreFn(c.signals).score }
-      const best = selectBestCandidate(candidates)
+      // 7. Score and return best, among those not disproved
+      const surviving = candidates.filter((c) => !c.rejected)
+      for (const c of surviving) { c.confidence = scoreFn(c.signals).score }
+      const best = selectBestCandidate(surviving)
       if (best && best.confidence > 0) {
-        return Object.freeze({ email: best.email, confidence: best.confidence, firstName: best.firstName, lastName: best.lastName, position: best.position || role, linkedinUrl: null })
+        // `source` separates an address seen somewhere from one built out of a
+        // firstname.lastname template. Both came back in the same shape before,
+        // and a caller had no way to tell a finding from a guess.
+        return Object.freeze({
+          email: best.email, confidence: best.confidence, firstName: best.firstName,
+          lastName: best.lastName, position: best.position || role, linkedinUrl: null,
+          source: best.source, verified: false, smtpInformative,
+        })
       }
 
       // 8. Fallback
