@@ -13,8 +13,28 @@ Self-hosted multi-channel contact intelligence. Find verified business emails at
 | Search Mining | Search engine result scraping | Free (needs Brave API key) |
 | GitHub Mining | Public commit email extraction | Free (60/hr, 5000/hr with token) |
 | YouTube Mining | Channel about page business email | Free |
-| Company Registry | French Pappers/Societe.com SIREN extraction | Free |
-| Phone Discovery | French company registry phone numbers | Free |
+| Company Registry | French Pappers/Societe.com SIREN extraction (FR only) | Free |
+| Phone Discovery | Registry phone numbers, entity-attributed (FR only) | Free |
+
+### Company registry: what it will and will not tell you
+
+This channel reads French registers only, and every result says so:
+`{ jurisdiction: "FR", entityMatched: boolean, siren, phones, emails }`.
+
+`entityMatched` is the contract. A search engine returns records of companies that
+merely resemble the query, and a page like `societe.com/societe/<company>.html` runs
+to 170 000 characters carrying dozens of phone numbers that belong to the site, to
+adverts and to "similar companies". Two gates therefore apply before anything is
+attributed:
+
+1. the page must name the target;
+2. a phone must sit within 600 characters of that mention *and* be introduced as a
+   contact number.
+
+When both hold, results are scored through the shared confidence matrix. When they
+do not, the channel returns nothing rather than a plausible wrong answer. Callers
+must treat `entityMatched: false` as no data. An empty result on a real company is
+the expected output when the register does not publish a number in the open.
 
 ## Install
 

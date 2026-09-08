@@ -1,7 +1,22 @@
 /**
  * Company Registry — French mentions legales + Pappers scraping.
  * Extracts SIREN, emails, phones from company websites and registries.
+ *
+ * FRENCH JURISDICTION ONLY. Every result carries `jurisdiction: "FR"` and
+ * `entityMatched`. A registry page is mined only once it has been shown to name
+ * the target: a search engine will happily return the record of a different
+ * company, and a phone number scraped from it is not a weak signal, it is a
+ * wrong one. Callers must drop results where `entityMatched` is false.
  */
+
+export const REGISTRY_CONFIG = Object.freeze({
+  jurisdiction: "FR",
+  // Under 4 characters a token like "ai" or "web" matches half the register,
+  // so no match is claimed at all rather than guessed.
+  minTokenLength: 4,
+  maxRegistryPages: 2,
+  legalSuffixes: ["sas", "sarl", "sa", "eurl", "sasu", "sci", "snc", "gmbh", "ltd", "inc", "llc", "bv", "nv"],
+})
 
 const EMAIL_REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g
 const PHONE_REGEX = /(?:\+33\s?|0)[1-9](?:[\s.-]?\d{2}){4}/g
@@ -20,16 +35,52 @@ function normalizeDomain(raw) {
     .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "")
 }
 
-export function extractPhoneNumbers(text) {
+// A phone only counts as the company's when the page says so twice over: it sits
+// near a mention of the entity, and it is introduced as a contact number.
+// Measured 2026-09-09 on societe.com/societe/similarweb-france-sas-842296253.html:
+// 171 836 characters, the entity named at offset 99, 28 French numbers, the closest
+// 4 112 characters away. None of them belonged to the company. Without both gates
+// the channel returns the page's own furniture with a registry-grade score.
+const CONTACT_LABEL = /(t[eé]l[eé]phone|t[eé]l\.?|phone|standard|appelez|contact)[^0-9]{0,20}$/i
+
+function labelledAsContact(text, index) {
+  return CONTACT_LABEL.test(text.slice(Math.max(0, index - 60), index))
+}
+
+function mentionOffsets(text, near) {
+  const token = String(near || "").toLowerCase()
+  if (!token) return null
+  const haystack = text.toLowerCase()
+  const offsets = []
+  for (let i = haystack.indexOf(token); i !== -1; i = haystack.indexOf(token, i + 1)) {
+    offsets.push(i)
+  }
+  return offsets
+}
+
+export function extractPhoneNumbers(text, opts = {}) {
   if (!text || typeof text !== "string") return []
-  const matches = text.match(PHONE_REGEX) || []
+
+  const near = opts.near || null
+  const window = opts.window ?? 600
+  const offsets = near ? mentionOffsets(text, near) : null
+  // The entity is not named at all: nothing on this page can be attributed to it.
+  if (near && (!offsets || offsets.length === 0)) return []
+
   const seen = new Set()
-  return matches.filter((p) => {
-    const normalized = p.replace(/[\s.-]/g, "")
-    if (seen.has(normalized)) return false
+  const kept = []
+  PHONE_REGEX.lastIndex = 0
+  for (const match of text.matchAll(PHONE_REGEX)) {
+    if (near) {
+      const close = offsets.some((o) => Math.abs(match.index - o) <= window)
+      if (!close || !labelledAsContact(text, match.index)) continue
+    }
+    const normalized = match[0].replace(/[\s.-]/g, "")
+    if (seen.has(normalized)) continue
     seen.add(normalized)
-    return true
-  })
+    kept.push(match[0])
+  }
+  return kept
 }
 
 export function extractSiren(text) {
@@ -52,6 +103,36 @@ export function extractSiren(text) {
   }
 
   return null
+}
+
+/**
+ * Reduces a domain or a company name to the token that identifies it.
+ * "similarweb.com" and "Similarweb France SAS" both reduce to "similarweb".
+ */
+export function entityToken(target, config = REGISTRY_CONFIG) {
+  const raw = String(target || "").trim().toLowerCase()
+  if (!raw) return null
+
+  const host = raw
+    .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "")
+    .split(".")[0]
+
+  const token = host
+    .split(/[\s_-]+/)
+    .filter((w) => w && !config.legalSuffixes.includes(w))[0] || ""
+
+  return token.length >= config.minTokenLength ? token : null
+}
+
+/**
+ * True only when the page actually names the target. Absence of proof is
+ * treated as absence of match, never as a weak match.
+ */
+export function pageNamesEntity(text, target, config = REGISTRY_CONFIG) {
+  const token = entityToken(target, config)
+  if (!token || !text) return false
+  const safe = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`\\b${safe}`, "i").test(text)
 }
 
 function extractEmails(text) {
@@ -83,9 +164,17 @@ export async function scrapeMentionsLegales(url, deps = {}) {
 export async function searchFrenchRegistry(companyName, deps = {}) {
   const searchFn = deps.searchBraveWeb || deps.searchFn || (async () => ({ results: [] }))
   const scrapeFn = deps.scrape || (async () => ({ text: "", status: 0 }))
+  const config = deps.config || REGISTRY_CONFIG
 
   const name = String(companyName || "").trim()
-  if (!name) return Object.freeze({ emails: [], phones: [], siren: null, mentionsUrl: null })
+  const empty = {
+    emails: [], phones: [], siren: null, mentionsUrl: null,
+    entityMatched: false, jurisdiction: config.jurisdiction,
+  }
+  if (!name) return Object.freeze(empty)
+  // Without a usable token nothing can be attributed to the target, so the
+  // channel declines instead of returning whatever the search engine found.
+  if (!entityToken(name, config)) return Object.freeze(empty)
 
   let searchResults = []
   try {
@@ -97,16 +186,19 @@ export async function searchFrenchRegistry(companyName, deps = {}) {
   let allPhones = []
   let siren = null
   let mentionsUrl = null
+  let entityMatched = false
 
-  for (const result of searchResults.slice(0, 2)) {
+  for (const result of searchResults.slice(0, config.maxRegistryPages)) {
     if (!result.url) continue
     try {
       const page = await scrapeFn(result.url, { timeout: 15_000 })
-      if (page.text && page.status < 400) {
-        allEmails.push(...extractEmails(page.text))
-        allPhones.push(...extractPhoneNumbers(page.text))
-        if (!siren) siren = extractSiren(page.text)
-      }
+      if (!page.text || page.status >= 400) continue
+      // The record of another company is not partial evidence, it is noise.
+      if (!pageNamesEntity(page.text, name, config)) continue
+      entityMatched = true
+      allEmails.push(...extractEmails(page.text))
+      allPhones.push(...extractPhoneNumbers(page.text, { near: entityToken(name, config) }))
+      if (!siren) siren = extractSiren(page.text)
     } catch { /* skip */ }
   }
 
@@ -114,9 +206,12 @@ export async function searchFrenchRegistry(companyName, deps = {}) {
     const webSearch = await searchFn({ query: `${name} mentions legales`, count: 3 })
     for (const result of (webSearch.results || []).slice(0, 2)) {
       const url = result.url || ""
-      if (MENTIONS_PATHS.some((p) => url.includes(p))) {
+      // The page must both look like a legal notice AND name the target: a
+      // third party's mentions legales lists its own contacts, not ours.
+      if (MENTIONS_PATHS.some((p) => url.includes(p)) && pageNamesEntity(url, name, config)) {
         mentionsUrl = url
         const mentions = await scrapeMentionsLegales(url, { scrape: scrapeFn })
+        entityMatched = true
         allEmails.push(...mentions.emails)
         allPhones.push(...mentions.phones)
         if (!siren && mentions.siren) siren = mentions.siren
@@ -128,5 +223,8 @@ export async function searchFrenchRegistry(companyName, deps = {}) {
   allEmails = [...new Set(allEmails)]
   allPhones = [...new Set(allPhones.map((p) => p.replace(/[\s.-]/g, "")))]
 
-  return Object.freeze({ emails: allEmails, phones: allPhones, siren, mentionsUrl })
+  return Object.freeze({
+    emails: allEmails, phones: allPhones, siren, mentionsUrl,
+    entityMatched, jurisdiction: config.jurisdiction,
+  })
 }

@@ -264,15 +264,28 @@ export function createContactHunter(deps = {}) {
         } catch { /* non-critical */ }
       }
 
+      let registry = null
       if (typeof companyRegistryFn === "function") {
         try {
           const regResult = await companyRegistryFn(d, deps)
-          for (const phone of (regResult.phones || [])) {
-            phones.push({ type: "phone", value: phone, confidence: 78, source: "company_registry" })
+          // A registry hit that was never tied to the target is not a low-confidence
+          // contact, it is another company's. Emitting it at any score is a bug:
+          // `discover similarweb.com` used to return nine French landlines at 78.
+          const attributed = regResult.entityMatched === true
+          registry = {
+            jurisdiction: regResult.jurisdiction || null,
+            entityMatched: attributed,
+            siren: attributed ? (regResult.siren || null) : null,
           }
-          for (const email of (regResult.emails || [])) {
-            if (!channels.some((c) => c.value === email)) {
-              channels.push({ type: "email", value: email, confidence: 80, source: "company_registry" })
+          if (attributed) {
+            const score = computeConfidence([{ source: "company_registry" }]).score
+            for (const phone of (regResult.phones || [])) {
+              phones.push({ type: "phone", value: phone, confidence: score, source: "company_registry" })
+            }
+            for (const email of (regResult.emails || [])) {
+              if (!channels.some((c) => c.value === email)) {
+                channels.push({ type: "email", value: email, confidence: score, source: "company_registry" })
+              }
             }
           }
         } catch { /* non-critical */ }
@@ -286,6 +299,7 @@ export function createContactHunter(deps = {}) {
           provider: dnsInfo.provider,
           isCatchAll: dnsInfo.isCatchAll,
           patterns: searchResult.patterns,
+          registry,
         },
       })
     },
