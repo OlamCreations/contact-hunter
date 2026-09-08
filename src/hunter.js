@@ -117,12 +117,16 @@ export function createContactHunter(deps = {}) {
         } catch { /* non-critical */ }
       }
 
+      let registry = null
       if (typeof companyRegistryFn === "function") {
         try {
-          const regResult = await companyRegistryFn(d, deps)
-          for (const email of (regResult.emails || [])) {
-            if (!emails.some((e) => e.email === email)) {
-              emails.push({ email, confidence: 80, firstName: null, lastName: null, position: null, linkedinUrl: null })
+          registry = await companyRegistryFn(d, deps)
+          if (registry.entityMatched === true) {
+            const score = computeConfidence([{ source: "company_registry" }]).score
+            for (const email of (registry.emails || [])) {
+              if (!emails.some((e) => e.email === email)) {
+                emails.push({ email, confidence: score, firstName: null, lastName: null, position: null, linkedinUrl: null })
+              }
             }
           }
         } catch { /* non-critical */ }
@@ -131,7 +135,7 @@ export function createContactHunter(deps = {}) {
       const foundEmails = emails.map((e) => e.email)
       const detected = detectDomainPattern(foundEmails, d)
       const patterns = detected ? [detected.pattern] : []
-      return Object.freeze({ emails, organization: null, patterns })
+      return Object.freeze({ emails, organization: null, patterns, registry })
     },
 
     async findEmail(domain, role) {
@@ -264,10 +268,13 @@ export function createContactHunter(deps = {}) {
         } catch { /* non-critical */ }
       }
 
+      // Reuses the pass domainSearch already made: calling the channel twice
+      // burned the search quota that then returned HTTP 429 to both.
       let registry = null
-      if (typeof companyRegistryFn === "function") {
+      {
         try {
-          const regResult = await companyRegistryFn(d, deps)
+          const regResult = searchResult.registry
+          if (!regResult) throw new Error("no_registry")
           // A registry hit that was never tied to the target is not a low-confidence
           // contact, it is another company's. Emitting it at any score is a bug:
           // `discover similarweb.com` used to return nine French landlines at 78.
@@ -276,6 +283,8 @@ export function createContactHunter(deps = {}) {
             jurisdiction: regResult.jurisdiction || null,
             entityMatched: attributed,
             siren: attributed ? (regResult.siren || null) : null,
+            searchError: regResult.searchError ?? null,
+            conclusive: regResult.conclusive ?? true,
           }
           if (attributed) {
             const score = computeConfidence([{ source: "company_registry" }]).score

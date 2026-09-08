@@ -39,16 +39,20 @@ async function defaultSearch(params) {
       headers: { "X-Subscription-Token": apiKey, Accept: "application/json" },
       signal: AbortSignal.timeout(10_000),
     })
+    // A throttled search is not an empty web. Returning [] here made the
+    // registry channel conclude "no record" on a company that has one.
+    if (!response.ok) return { results: [], error: `http_${response.status}` }
     const data = await response.json()
     return {
+      error: null,
       results: (data.web?.results || []).map((r) => ({
         title: r.title,
         url: r.url,
         snippet: r.description,
       })),
     }
-  } catch {
-    return { results: [] }
+  } catch (err) {
+    return { results: [], error: err.name || "search_failed" }
   }
 }
 

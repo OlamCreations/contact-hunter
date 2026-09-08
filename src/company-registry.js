@@ -25,10 +25,26 @@ const BARE_SIREN = /\b(\d{3}\s?\d{3}\s?\d{3})\b/g
 
 const NOISE_EMAILS = new Set(["noreply", "no-reply", "example", "test", "admin", "webmaster"])
 
-const MENTIONS_PATHS = [
-  "/mentions-legales", "/legal", "/mentions", "/cgu",
-  "/impressum", "/legal-notice", "/politique-de-confidentialite",
+const MENTIONS_SLUGS = [
+  "mentions-legales", "mentions", "legal", "legal-notice", "cgu",
+  "impressum", "politique-de-confidentialite",
 ]
+
+/**
+ * A legal notice, not merely a page filed under /legal. Matching anywhere in the
+ * URL accepted similarweb.com/corp/legal/content-disclaimers/, a content policy
+ * with no contact details, whose stray digits then became a phone number.
+ */
+export function isLegalNoticeUrl(url) {
+  let path
+  try {
+    path = new URL(String(url)).pathname
+  } catch {
+    return false
+  }
+  const last = path.split("/").filter(Boolean).pop()
+  return Boolean(last) && MENTIONS_SLUGS.includes(last.toLowerCase())
+}
 
 function normalizeDomain(raw) {
   return String(raw || "").trim().toLowerCase()
@@ -63,6 +79,9 @@ export function extractPhoneNumbers(text, opts = {}) {
 
   const near = opts.near || null
   const window = opts.window ?? 600
+  // Proximity implies the label check; a page known to be the target's own
+  // still needs the label, since any digit run can look like a phone number.
+  const requireLabel = opts.requireLabel ?? Boolean(near)
   const offsets = near ? mentionOffsets(text, near) : null
   // The entity is not named at all: nothing on this page can be attributed to it.
   if (near && (!offsets || offsets.length === 0)) return []
@@ -73,8 +92,9 @@ export function extractPhoneNumbers(text, opts = {}) {
   for (const match of text.matchAll(PHONE_REGEX)) {
     if (near) {
       const close = offsets.some((o) => Math.abs(match.index - o) <= window)
-      if (!close || !labelledAsContact(text, match.index)) continue
+      if (!close) continue
     }
+    if (requireLabel && !labelledAsContact(text, match.index)) continue
     const normalized = match[0].replace(/[\s.-]/g, "")
     if (seen.has(normalized)) continue
     seen.add(normalized)
@@ -152,7 +172,7 @@ export async function scrapeMentionsLegales(url, deps = {}) {
     }
 
     const emails = extractEmails(page.text)
-    const phones = extractPhoneNumbers(page.text)
+    const phones = extractPhoneNumbers(page.text, { requireLabel: true })
     const siren = extractSiren(page.text)
 
     return Object.freeze({ emails, phones, siren, error: null })
@@ -170,6 +190,7 @@ export async function searchFrenchRegistry(companyName, deps = {}) {
   const empty = {
     emails: [], phones: [], siren: null, mentionsUrl: null,
     entityMatched: false, jurisdiction: config.jurisdiction,
+    searchError: null, conclusive: true,
   }
   if (!name) return Object.freeze(empty)
   // Without a usable token nothing can be attributed to the target, so the
@@ -177,10 +198,14 @@ export async function searchFrenchRegistry(companyName, deps = {}) {
   if (!entityToken(name, config)) return Object.freeze(empty)
 
   let searchResults = []
+  let searchError = null
   try {
     const response = await searchFn({ query: `${name} site:pappers.fr OR site:societe.com SIREN`, count: 5 })
     searchResults = response.results || []
-  } catch { /* search failed */ }
+    searchError = response.error || null
+  } catch (err) {
+    searchError = err.name || "search_failed"
+  }
 
   let allEmails = []
   let allPhones = []
@@ -204,11 +229,12 @@ export async function searchFrenchRegistry(companyName, deps = {}) {
 
   try {
     const webSearch = await searchFn({ query: `${name} mentions legales`, count: 3 })
+    if (webSearch.error && !searchError) searchError = webSearch.error
     for (const result of (webSearch.results || []).slice(0, 2)) {
       const url = result.url || ""
       // The page must both look like a legal notice AND name the target: a
       // third party's mentions legales lists its own contacts, not ours.
-      if (MENTIONS_PATHS.some((p) => url.includes(p)) && pageNamesEntity(url, name, config)) {
+      if (isLegalNoticeUrl(url) && pageNamesEntity(url, name, config)) {
         mentionsUrl = url
         const mentions = await scrapeMentionsLegales(url, { scrape: scrapeFn })
         entityMatched = true
@@ -226,5 +252,8 @@ export async function searchFrenchRegistry(companyName, deps = {}) {
   return Object.freeze({
     emails: allEmails, phones: allPhones, siren, mentionsUrl,
     entityMatched, jurisdiction: config.jurisdiction,
+    searchError,
+    // The channel only claims a verdict when it actually got to look.
+    conclusive: !searchError || entityMatched,
   })
 }
