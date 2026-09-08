@@ -32,7 +32,11 @@ function buildEmptyFindResult(role) {
 
 function toHunterVerifyResult(smtpResult) {
   if (!smtpResult) return { result: "undeliverable", score: 0 }
-  if (smtpResult.valid && smtpResult.catchAll) return { result: "risky", score: 50 }
+  // A domain that accepts every recipient, or that was never shown to reject one,
+  // cannot deliver a verdict. Reporting "deliverable" there is the lie the tool
+  // told about zzq-nexistepas-8412@similarweb.com on 2026-09-09.
+  if (smtpResult.valid && smtpResult.catchAll === true) return { result: "risky", score: 50 }
+  if (smtpResult.valid && smtpResult.catchAll === null) return { result: "unknown", score: 40 }
   if (smtpResult.valid) return { result: "deliverable", score: 95 }
   if (smtpResult.reason === "greylisted") return { result: "risky", score: 30 }
   return { result: "undeliverable", score: 0 }

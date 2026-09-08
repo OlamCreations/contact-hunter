@@ -70,19 +70,27 @@ export function parseSpfRecord(txtRecords) {
   return Object.freeze({ includes, mechanisms, all })
 }
 
+/**
+ * Probes the domain with an address nobody owns. Returns true when the server
+ * accepts it (no address on that domain can then be verified by SMTP), false
+ * when it rejects it, and null when no probe could be run.
+ *
+ * Null matters: the previous default answered a hardcoded 550, so the function
+ * reported "not catch-all" without ever probing, and `verify` returned
+ * "deliverable, 95" for addresses that do not exist.
+ */
 export async function detectCatchAll(domain, mxHost, deps = {}) {
+  if (typeof deps.smtpCheck !== "function") return null
+
   try {
     const randomLocal = crypto.randomUUID().replace(/-/g, "").slice(0, 16)
     const randomEmail = `${randomLocal}@${normalizeDomain(domain)}`
 
-    const check = typeof deps.smtpCheck === "function"
-      ? deps.smtpCheck
-      : async () => ({ accepted: false, responseCode: 550 })
-
-    const result = await check(randomEmail, mxHost)
+    const result = await deps.smtpCheck(randomEmail, mxHost)
+    if (!result || result.error) return null
     return result.accepted === true && result.responseCode === 250
   } catch {
-    return false
+    return null
   }
 }
 
@@ -130,6 +138,7 @@ export async function analyzeDomain(rawDomain, deps = {}) {
   if (mxRecords.length > 0) {
     const primaryMx = mxRecords[0].exchange
     isCatchAll = await catchAllFn(domain, primaryMx, deps)
+    if (isCatchAll === undefined) isCatchAll = null
   }
 
   return Object.freeze({

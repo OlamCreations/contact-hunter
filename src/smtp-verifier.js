@@ -1,7 +1,13 @@
 import net from "node:net"
 import dns from "node:dns/promises"
 
+import crypto from "node:crypto"
+
 const SMTP_TIMEOUT_MS = 10_000
+
+function randomLocalPart() {
+  return crypto.randomUUID().replace(/-/g, "").slice(0, 16)
+}
 
 const BLOCKED_IP_RANGES = [
   /^127\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./,
@@ -156,7 +162,15 @@ export async function verifyEmailSmtp(email, deps = {}) {
 
   const resolveMxFn = deps.resolveMx || ((d) => dns.resolveMx(d))
   const handshakeFn = deps.smtpHandshake || smtpHandshake
-  const catchAllFn = deps.detectCatchAll || (async () => false)
+  // The catch-all probe runs on the same handshake as the verification itself.
+  // Left unwired it defaulted to "no catch-all", which is how an address that
+  // does not exist came back deliverable at 95.
+  const catchAllFn = deps.detectCatchAll || (async (d, mx) => {
+    const probe = `${randomLocalPart()}@${d}`
+    const r = await handshakeFn(mx, ehloDomain, probe, deps)
+    if (!r || r.error || r.greylisted) return null
+    return r.accepted === true
+  })
 
   let mxRecords
   try {
@@ -218,12 +232,25 @@ export async function verifyEmailSmtp(email, deps = {}) {
     })
   }
 
-  if (isCatchAll && result.accepted) {
+  if (isCatchAll === true && result.accepted) {
     return Object.freeze({
       email: normalized,
       valid: true,
       catchAll: true,
       reason: "catch_all",
+      mxHost: primaryMx,
+      responseCode: result.responseCode,
+    })
+  }
+
+  // Accepted, but the domain was never shown to reject anything: acceptance
+  // proves nothing here, and the result must not be dressed up as proof.
+  if (isCatchAll === null && result.accepted) {
+    return Object.freeze({
+      email: normalized,
+      valid: true,
+      catchAll: null,
+      reason: "accepted_catch_all_unknown",
       mxHost: primaryMx,
       responseCode: result.responseCode,
     })

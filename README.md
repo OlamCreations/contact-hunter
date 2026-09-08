@@ -86,6 +86,16 @@ const search = await hunter.domainSearch('company.com')
 const verify = await hunter.verifyEmail('alice@company.com')
 // { result: 'deliverable', score: 95 }
 
+// Four verdicts, and two of them mean "SMTP cannot decide here":
+//   deliverable   95  the server rejects unknown recipients and accepted this one
+//   undeliverable  0  the server rejected it
+//   risky         50  the domain accepts every recipient, so acceptance proves nothing
+//   unknown       40  the catch-all probe could not run, so acceptance proves nothing
+//
+// Measured 2026-09-09: aspmx.l.google.com answers 250 2.1.5 OK to
+// RCPT TO:<zzq-nexistepas-8412@similarweb.com>. Any tool reporting that address
+// as deliverable is reporting the absence of a rejection as a confirmation.
+
 // Full discovery
 const discover = await hunter.discoverContacts('company.com')
 // { contacts: [...], phones: [...], meta: { provider: 'google_workspace', ... } }
