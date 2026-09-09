@@ -173,9 +173,13 @@ export async function verifyEmailSmtp(email, deps = {}) {
   })
 
   let mxRecords
+  let dnsFailed = false
   try {
     mxRecords = await resolveMxFn(domain)
   } catch {
+    // A resolver hiccup is not a domain without mail. Collapsing the two made
+    // verify answer undeliverable for addresses that are perfectly alive.
+    dnsFailed = true
     mxRecords = []
   }
 
@@ -184,7 +188,7 @@ export async function verifyEmailSmtp(email, deps = {}) {
       email: normalized,
       valid: false,
       catchAll: false,
-      reason: "no_mx",
+      reason: dnsFailed ? "dns_error" : "no_mx",
       mxHost: null,
       responseCode: 0,
     })

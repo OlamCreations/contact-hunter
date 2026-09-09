@@ -38,6 +38,9 @@ function toHunterVerifyResult(smtpResult) {
   // told about zzq-nexistepas-8412@similarweb.com on 2026-09-09.
   if (smtpResult.valid && smtpResult.catchAll === true) return { result: "risky", score: 50 }
   if (smtpResult.valid && smtpResult.catchAll === null) return { result: "unknown", score: 40 }
+  // The lookup never happened. Saying "undeliverable" here would retire a
+  // live address on the strength of a resolver timeout.
+  if (smtpResult.reason === "dns_error") return { result: "unknown", score: 0 }
   if (smtpResult.valid) return { result: "deliverable", score: 95 }
   if (smtpResult.reason === "greylisted") return { result: "risky", score: 30 }
   return { result: "undeliverable", score: 0 }
@@ -147,6 +150,10 @@ export function createContactHunter(deps = {}) {
       const d = normalizeDomain(domain)
       if (!d) return buildEmptyFindResult(role)
 
+      // Records whether each channel ran, so "found nothing" stays distinct
+      // from "never looked". Channels fail quietly by design, and a silent
+      // failure used to be indistinguishable from an honest empty result.
+      const channels = {}
       const roleParts = String(role || "").trim().split(/\s+/)
       const firstName = (roleParts[0] || "").toLowerCase()
       const lastName = (roleParts.slice(1).join(" ") || "").toLowerCase()
@@ -164,12 +171,13 @@ export function createContactHunter(deps = {}) {
       if (typeof extractWebEmailsFn === "function") {
         try {
           const webResult = await extractWebEmailsFn(d, deps)
+          channels.web_scrape = "ok"
           for (const item of (webResult.emails || [])) {
             if (!candidates.some((c) => c.email === item.email)) {
               candidates.push({ email: item.email, firstName: null, lastName: null, position: role, source: "web_scrape", signals: [{ source: "web_scrape" }] })
             }
           }
-        } catch { /* non-critical */ }
+        } catch { channels.web_scrape = "error" }
       }
 
       // 3. Search mining
@@ -177,36 +185,39 @@ export function createContactHunter(deps = {}) {
         try {
           const name = firstName ? (firstName + " " + lastName).trim() : role
           const searchResult = await searchEmailsFn(name, d, deps)
+          channels.search_engine = "ok"
           for (const item of (searchResult.emails || [])) {
             const existing = candidates.find((c) => c.email === item.email)
             if (existing) { existing.signals.push({ source: "search_engine" }) }
             else { candidates.push({ email: item.email, firstName: null, lastName: null, position: role, source: "search_engine", signals: [{ source: "search_engine" }] }) }
           }
-        } catch { /* non-critical */ }
+        } catch { channels.search_engine = "error" }
       }
 
       // 4. GitHub mining
       if (typeof githubMinerFn === "function" && firstName) {
         try {
           const ghResult = await githubMinerFn((firstName + " " + lastName).trim(), d, deps)
+          channels.github = "ok"
           for (const item of (ghResult.emails || [])) {
             const existing = candidates.find((c) => c.email === item.email)
             if (existing) { existing.signals.push({ source: "github" }) }
             else { candidates.push({ email: item.email, firstName: item.name || null, lastName: null, position: role, source: "github", signals: [{ source: "github" }] }) }
           }
-        } catch { /* non-critical */ }
+        } catch { channels.github = "error" }
       }
 
       // 5. Company registry
       if (typeof companyRegistryFn === "function") {
         try {
           const regResult = await companyRegistryFn(d, deps)
+          channels.company_registry = regResult.conclusive === false ? "error" : "ok"
           for (const email of (regResult.emails || [])) {
             const existing = candidates.find((c) => c.email === email)
             if (existing) { existing.signals.push({ source: "company_registry" }) }
             else { candidates.push({ email, firstName: null, lastName: null, position: role, source: "company_registry", signals: [{ source: "company_registry" }] }) }
           }
-        } catch { /* non-critical */ }
+        } catch { channels.company_registry = "error" }
       }
 
       // 6. SMTP verify, budget spent where it discriminates (rate-limited)
@@ -230,7 +241,7 @@ export function createContactHunter(deps = {}) {
             return Object.freeze({
               email: c.email, confidence: c.confidence, firstName: c.firstName,
               lastName: c.lastName, position: c.position, linkedinUrl: null,
-              source: c.source, verified: true, smtpInformative: true,
+              source: c.source, verified: true, smtpInformative: true, channels,
             })
           }
           // The server said this recipient does not exist. Keeping the candidate
@@ -260,7 +271,7 @@ export function createContactHunter(deps = {}) {
         return Object.freeze({
           email: best.email, confidence: best.confidence, firstName: best.firstName,
           lastName: best.lastName, position: best.position || role, linkedinUrl: null,
-          source: best.source, verified: false, smtpInformative,
+          source: best.source, verified: false, smtpInformative, channels,
         })
       }
 
@@ -289,19 +300,19 @@ export function createContactHunter(deps = {}) {
       if (!d) return Object.freeze({ contacts: [], phones: [], meta: {} })
 
       const dnsInfo = await analyzeDomainFn(d, deps)
-      const channels = []
+      const found = []
       const phones = []
 
       const searchResult = await this.domainSearch(d)
       for (const email of searchResult.emails) {
-        channels.push({ type: "email", value: email.email, confidence: email.confidence, source: "domain_search" })
+        found.push({ type: "email", value: email.email, confidence: email.confidence, source: "domain_search" })
       }
 
       if (typeof youtubeMinerFn === "function" && opts.youtubeUrl) {
         try {
           const ytResult = await youtubeMinerFn(opts.youtubeUrl, deps)
           if (ytResult.email) {
-            channels.push({ type: "email", value: ytResult.email, confidence: 65, source: "youtube_about" })
+            found.push({ type: "email", value: ytResult.email, confidence: 65, source: "youtube_about" })
           }
         } catch { /* non-critical */ }
       }
@@ -330,8 +341,8 @@ export function createContactHunter(deps = {}) {
               phones.push({ type: "phone", value: phone, confidence: score, source: "company_registry" })
             }
             for (const email of (regResult.emails || [])) {
-              if (!channels.some((c) => c.value === email)) {
-                channels.push({ type: "email", value: email, confidence: score, source: "company_registry" })
+              if (!found.some((c) => c.value === email)) {
+                found.push({ type: "email", value: email, confidence: score, source: "company_registry" })
               }
             }
           }
@@ -339,7 +350,7 @@ export function createContactHunter(deps = {}) {
       }
 
       return Object.freeze({
-        contacts: channels,
+        contacts: found,
         phones,
         meta: {
           domain: d,
